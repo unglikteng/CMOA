@@ -1,0 +1,331 @@
+---
+title: "CMOA - data preprocessing"
+author: "Ung Lik Teng"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+##Importing Libraries
+```{r}
+library(readxl)
+library(ggmap)
+library(ggplot2)
+library(dplyr)
+library(stringr)
+library(rJava)
+library(xlsx)
+library(rebus)
+library(lettercase)
+library(genderizeR)
+library(Rserve)
+library(mvoutlier)
+library(tidyr)
+```
+##Importing the spreadsheet
+```{r}
+cmoa <- read_excel("cmoa.xlsx", sheet =1)
+```
+##Code the gender of the artist using genderizeR. I also use dplyr package to subset relevant columns to construct the artist table.
+```{r}
+cmoa_artist <- select(cmoa, `title`, `party_type`, `full_name`, `cited_name`, `role`, `nationality`) 
+cmoa_artist
+colnames(cmoa_artist)
+table(cmoa_artist['party_type'])
+table(cmoa_artist['role'])
+table(cmoa_artist['full_name'])
+cmoa_title <- distinct(cmoa_artist['title'])
+table(cmoa_artist['title'])
+
+givenNames = findGivenNames(as.character(full_artist$first_name), progress = FALSE)
+what <- genderize(as.character(full_artist$first_name), genderDB = givenNames, progress = FALSE)
+```
+##Geocoding the birthplace and deathplace of the artist 
+```{r}
+#GETTING THE TRIMMED DOWN ARTIST DATASET 
+cmoa.artist <- select(cmoa, `artist_id`, `party_type`, `full_name`, `cited_name`, `role`, `nationality`, `birth_date`, `death_date`, `birth_place`, `death_place` ) 
+cmoa.artist[duplicated(cmoa.artist$artist_id),]
+cmoa.artist[duplicated(cmoa.artist["full_name"]),]
+cmoa.artist <- cmoa.artist[order(cmoa.artist$full_name),]
+cmoa.artist_nd<-cmoa.artist[!duplicated(cmoa.artist$full_name),]
+cmoa.artist_nd["n_photo"] <- (cmoa %>% group_by(full_name) %>% summarise(work_count =n()))[2]
+head(cmoa.artist_nd)
+
+#BIRTHPLACE AND DEATHPLACE 
+cmoa.art.bp <- select(cmoa.artist_nd, `full_name`, `nationality`, `birth_place`)
+head(cmoa.art.bp)
+cmoa.art.bp <- cmoa.art.bp[!is.na(cmoa.art.bp$birth_place),]
+cmoa.art.bp[c("bp_lon", "bp_lat")] <- geocode(as.matrix(cmoa.art.bp$birth_place))
+cmoa.art.bp <- filter(cmoa.art.bp, `birth_place` != "|")
+
+cmoa.art.dp <- select(cmoa.artist_nd, `full_name`, `nationality`, `death_place`)
+cmoa.art.dp <- cmoa.art.dp[!is.na(cmoa.art.dp$death_place),]
+cmoa.art.dp[c("dp_lon", "dp_lat")] <- geocode(as.matrix(cmoa.art.dp$death_place))
+cmoa.art.dp <- filter(cmoa.art.dp, `death_place` != "|")
+
+geocodeQueryCheck(userType = "free")
+```
+##Some photographs have more than 1 creator/artist. To analyze only the photograph, I use stringr and regular expression to split the photographer and add it to the row below. This is done for both birthplace subset and deathplace subset 
+```{r}
+#Split photographer
+cmoa.art.bp[c("photographer_1", "photographer_2")] <- str_split(as.matrix(cmoa.art.bp["full_name"]), pattern = fixed("|"), simplify = T)
+cmoa.art.bp["full_name"] <- NULL
+cmoa.art.bp[c("nationality_1", "nationality_2")] <- str_split(as.matrix(cmoa.art.bp["nationality"]), pattern = fixed("|"), simplify = T)
+cmoa.art.bp["nationality"] <- NULL
+cmoa.art.bp[c("birth_place_1", "birth_place_2")] <- str_split(as.matrix(cmoa.art.bp["birth_place"]), pattern = fixed("|"), simplify = T)
+cmoa.art.bp["birth_place"] <- NULL
+cmoa.art.bp[c("bp_lon_1", "bp_lat_1")] <- geocode(as.matrix(cmoa.art.bp$birth_place_1))
+cmoa.art.bp[c("bp_lon_2", "bp_lat_2")] <- geocode(as.matrix(cmoa.art.bp$birth_place_2))
+cmoa.art.bp[c("dp_lon","dp_lat")] <- NULL
+write.xlsx(cmoa.art.bp, "cmoa_artist_birthplace.xlsx", sheetName="Sheet1", row.names = FALSE)
+
+names(cmoa.art.bp)
+bp1 <- select(cmoa.art.bp, `photographer_1`, `nationality_1`, `birth_place_1`, `dp_lon_1`, `dp_lat_1`)
+bp2 <- select(cmoa.art.bp, `photographer_2`, `nationality_2`, `birth_place_2`, `dp_lon_2`, `dp_lat_2`)
+names(bp1) <- c("photographer" , "nationality", "birth_place", "bp_lon", "bp_lat")
+bp_combined <- t(cbind(t(bp1[,]), t(bp2[2:188,])))
+bp_combined <- as.data.frame(bp_combined)
+bp_combined <- filter(bp_combined, !(bp_combined$photographer == ""))
+
+cmoa.art.dp["full_name"] <- NULL
+cmoa.art.dp["full_name_1"] <- NULL
+cmoa.art.dp[c("nationality_1", "nationality_2")] <- str_split(as.matrix(cmoa.art.dp["nationality"]), pattern = fixed("|"), simplify = T)
+cmoa.art.dp["nationality"] <- NULL
+cmoa.art.dp[c("death_place_1", "death_place_2")] <- str_split(as.matrix(cmoa.art.dp["death_place"]), pattern = fixed("|"), simplify = T)
+cmoa.art.dp["death_place"] <- NULL
+cmoa.art.dp[c("dp_lon_1", "dp_lat_1")] <- geocode(as.matrix(cmoa.art.dp$death_place_1))
+cmoa.art.dp[c("dp_lon_2", "dp_lat_2")] <- geocode(as.matrix(cmoa.art.dp$death_place_2))
+cmoa.art.dp[c("dp_lon","dp_lat")] <- NULL
+write.xlsx(cmoa.art.dp, "cmoa_artist_deathplace.xlsx", sheetName="Sheet1", row.names = FALSE)
+
+names(cmoa.art.dp)
+dp1 <- select(cmoa.art.dp, `photographer_1`, `nationality_1`, `death_place_1`, `dp_lon_1`, `dp_lat_1`)
+dp2 <- select(cmoa.art.dp, `photographer_2`, `nationality_2`, `death_place_2`, `dp_lon_2`, `dp_lat_2`)
+names(dp1) <- c("photographer" , "nationality", "death_place", "dp_lon", "dp_lat")
+dp_combined <- t(cbind(t(dp1[,]), t(dp2[2:188,])))
+dp_combined <- as.data.frame(dp_combined)
+dp_combined <- filter(dp_combined, !(dp_combined$photographer == ""))
+
+bp_combined <- filter(bp_combined, !(duplicated(bp_combined$photographer)))
+dp_combined <- filter(dp_combined, !(duplicated(dp_combined$photographer)))
+which(duplicated(bp_combined$photographer))
+which(duplicated(dp_combined$photographer))
+```
+##Do the same for artist's birthdate and deathdate
+```{r}
+names(cmoa.artist_nd)
+cmoa.art.bd.dd <- select(cmoa.artist_nd, `full_name`, `birth_date`, `death_date`, `nationality`, `party_type`, `n_photo`)
+head(cmoa.art.bd.dd)
+names(cmoa.art.bd.dd)
+
+cmoa.art.bd.dd[c("photographer_1", "photographer_2")] <- str_split(as.matrix(cmoa.art.bd.dd["full_name"]), pattern = fixed("|"), simplify = T)
+cmoa.art.bd.dd["full_name"] <- NULL
+cmoa.art.bd.dd[c("nationality_1", "nationality_2")] <- str_split(as.matrix(cmoa.art.bd.dd["nationality"]), pattern = fixed("|"), simplify = T)
+cmoa.art.bd.dd["nationality"] <- NULL
+cmoa.art.bd.dd[c("birth_date_1", "birth_date_2")] <- str_split(as.matrix(cmoa.art.bd.dd["birth_date"]), pattern = fixed("|"), simplify = T)
+cmoa.art.bd.dd["birth_date"] <- NULL
+cmoa.art.bd.dd[c("death_date_1", "death_date_2")] <- str_split(as.matrix(cmoa.art.bd.dd["death_date"]), pattern = fixed("|"), simplify = T)
+cmoa.art.bd.dd["death_date"] <- NULL
+cmoa.art.bd.dd[c("party_type1", "party_type2")] <- str_split(as.matrix(cmoa.art.bd.dd["party_type"]), pattern = fixed("|"), simplify = T)
+cmoa.art.bd.dd["party_type"] <- NULL
+cmoa.art.bd.dd["n_photo_2"]<- numeric(438)
+cmoa.art.bd.dd[!(cmoa.art.bd.dd$photographer_2 == ""),"n_photo_2"]<-  cmoa.art.bd.dd[!(cmoa.art.bd.dd$photographer_2 == ""), 'n_photo' ]
+
+
+
+bd.dd1 <-select(cmoa.art.bd.dd, `photographer_1`, `n_photo`, `nationality_1`, `party_type1`, `birth_date_1`, `death_date_1`)
+bd.dd2 <- select(cmoa.art.bd.dd, `photographer_2`, `n_photo_2`, `nationality_2`, `party_type2`, `birth_date_2`, `death_date_2`)
+names(bd.dd1) <- c("photographer" , "n_photo", "nationality", "party_type", "birth_date", "death_date")
+bd.dd_combined <- t(cbind(t(bd.dd1[,]), t(bd.dd2[2:438,])))
+bd.dd_combined <- as.data.frame(bd.dd_combined)
+bd.dd_combined <- filter(bd.dd_combined, !(bd.dd_combined$photographer == ""))
+
+pattern.bddd <- exactly(one_or_more(DGT))
+bd_renew <- as.Date(as.numeric(str_subset(bd.dd_combined$birth_date, pattern = pattern.bddd)), origin = "1899-12-30")
+index_bd <- which(str_detect(bd.dd_combined$birth_date, pattern = pattern.bddd))
+bd.dd_combined$birth_date <- as.character(bd.dd_combined$birth_date)
+bd.dd_combined[index_bd, 'birth_date'] <- as.character(bd_renew)
+
+dd_renew <- as.Date(as.numeric(str_subset(bd.dd_combined$death_date, pattern = pattern.bddd)), origin = "1899-12-30")
+index_dd <- which(str_detect(bd.dd_combined$death_date, pattern = pattern.bddd))
+bd.dd_combined$death_date <- as.character(bd.dd_combined$death_date)
+bd.dd_combined[index_dd, 'death_date'] <- as.character(dd_renew)
+
+sum(is.na(bd.dd_combined$birth_date))
+sum(is.na(bd.dd_combined$death_date))
+
+first_four <- dgt(4)
+bd_renew2 <- str_extract(bd.dd_combined$birth_date, pattern = first_four)
+bd.dd_combined['birth_year'] <- as.character(bd_renew2)
+
+dd_renew2 <- str_extract(bd.dd_combined$death_date, pattern = first_four)
+bd.dd_combined['death_year'] <- as.character(dd_renew2)
+bd.dd_combined$n_photo <- as.numeric(bd.dd_combined$n_photo)
+bd.dd_combined <- filter(bd.dd_combined, !(duplicated(bd.dd_combined$photographer)))
+
+cmoa.art.bd.dd$birth_date <- as.Date(cmoa.art.bd.dd$birth_date, format = "%d/%m/%Y")
+cmoa.art.bd.dd$birth_date
+which(duplicated(bd.dd_combined$photographer))
+```
+##The Creation Date column of the data contains a lot of noise such unwanted "." or "/".
+##For this dataset, we are only interested in the year in which the photograph is created, hence we will clean the creation date column to standardize it to four digit years
+```{r}
+cmoa_date <- select(cmoa, `title`, `creation_date`, `creation_date_earliest`, `creation_date_latest`)
+sum(is.na(cmoa_date$creation_date))
+sum(is.na(cmoa_date$creation_date_earliest))
+sum(is.na(cmoa_date$creation_date_latest))
+cmoa_date[is.na(cmoa_date$creation_date_earliest), c(2,3,4)]
+
+#this code chunk below remove the empty year, which is represented by "c."
+c_dot <- "c" %R% DOT %R% SPC
+sub_c_dot <- str_subset(cmoa_date$creation_date, pattern = c_dot) 
+index_cdot <- which(str_detect(cmoa_date$creation_date, pattern = c_dot))
+cmoa_date[index_cdot, 'creation_date'] <- str_replace(sub_c_dot, pattern = c_dot, replacement = "")
+
+#some rows also show the printed years, we want the creation date hence we remove the printed years 
+printed <- SPC %R% "printed"
+sub_printed <- str_subset(cmoa_date$creation_date, pattern = printed)
+index_printed <- which(str_detect(cmoa_date$creation_date, pattern = printed))
+str_extract(sub_printed, pattern = (dgt(4)))
+cmoa_date[index_printed, 'creation_date'] <- str_extract(sub_printed, pattern = (dgt(4)))
+
+#We replace the NA values with the latest creation date  
+cmoa_date[is.na(cmoa_date$creation_date), 'creation_date'] <- cmoa_date[is.na(cmoa_date$creation_date), "updated_latest_year"]
+
+#Some creation date shows a range from year-year. I take the mean of the two years
+xxxx <- dgt(4) %R% "-" %R% dgt(4)
+xxxx_split <- str_split(xxxx_subset, pattern = "-")
+xxxx_subset <- str_subset(cmoa_date$creation_date, pattern = xxxx)
+numeric_xxxx <- sapply(xxxx_split, as.numeric, simplify = F)
+mean_xxxx <- sapply(numeric_xxxx, mean, simplify = F)
+round_xxxx <- sapply(mean_xxxx, round)
+index_xxxx <- which(str_detect(cmoa_date$creation_date, pattern = xxxx))
+cmoa_date[index_xxxx, 'creation_date'] <- round_xxxx
+
+#there are years in the format of 1960s, I use randomization to estimate a year 
+early_ies <- "early" %R% SPC %R% (dgt(4)) %R% "s"
+late_ies <- "late"  %R% SPC %R% (dgt(4)) %R% "s"
+early_set <- str_subset(cmoa_date$creation_date, patter = early_ies)
+late_set <- str_subset(cmoa_date$creation_date, patter = late_ies)
+
+set.seed(19292)
+early_sample <- sample(0:4, size = length(early_set), replace = TRUE)
+late_sample<- sample(5:9, size = length(late_set), replace = TRUE)
+
+early_set <- str_replace(early_set, pattern = 0 %R% "s", replacement = as.character(early_sample))
+late_set <- str_replace(late_set, pattern = 0 %R% "s", replacement = as.character(late_sample))
+early_set <- str_replace(early_set, pattern = "early" %R% SPC, replacement = "")
+late_set <- str_replace(late_set, pattern = "late" %R% SPC, replacement = "")
+index_early <- str_detect(cmoa_date$creation_date, patter = early_ies)
+index_late <- str_detect(cmoa_date$creation_date, patter = late_ies)
+
+cmoa_date[index_early, 'creation_date'] <- early_set
+cmoa_date[index_late, 'creation_date'] <- late_set
+
+#1960s no dash
+ies <- START %R% dgt(4) %R% "s" %R% END
+ies_set <- str_subset(cmoa_date$creation_date, patter = ies)
+set.seed(123408)
+ies_sample <- sample(0:9, size = length(ies_set), replace = TRUE)
+index_ies <- str_detect(cmoa_date$creation_date, patter = ies)
+
+ies_set <- str_replace(ies_set, pattern = 0 %R% "s", replacement = as.character(ies_sample))
+cmoa_date[index_ies, 'creation_date'] <- ies_set
+
+#1960s - 
+ies_dash <- 0 %R% "s"
+iesdash_set <- str_subset(cmoa_date$creation_date, patter = ies_dash)
+
+set.seed(1234123)
+iesd_sam1 <- sample(0:9, length(iesdash_set), replace = T)
+
+set.seed(59204)
+iesd_sam2 <- sample(0:9, length(iesdash_set), r = T)
+
+iesdash_set <- str_replace(iesdash_set, pattern = 0 %R% "s", replacement = as.character(iesd_sam1))
+iesdash_set <- str_replace(iesdash_set, pattern = 0 %R% "s" %R% END, replacement = as.character(iesd_sam2[1:35]))
+
+index_iesdash <- str_detect(cmoa_date$creation_date, patter = ies_dash)
+cmoa_date[index_iesdash, 'creation_date'] <- iesdash_set
+
+#there are years with the format of mid-1960s, I replace this instance with 1965
+which(str_detect(cmoa_date$creation_date, pattern = "mid-1960s"))
+cmoa_date[712, 'creation_date'] <- "1965"
+
+#Remove other unncessary words such as centure, posthumous
+word <- one_or_more(ANY_CHAR)
+str_subset(cmoa_date$creation_date, pattern = word)
+
+#Remove c.
+c_dot <- "c" %R% DOT
+sub_c_dot <- str_subset(cmoa_date$creation_date, pattern = c_dot) 
+index_cdot <- which(str_detect(cmoa_date$creation_date, pattern = c_dot))
+cmoa_date[index_cdot, 'creation_date'] <- str_replace(sub_c_dot, pattern = c_dot, replacement = "")
+
+#Remove ca.
+ca_dot <- "ca" %R% DOT
+sub_ca_dot <- str_subset(cmoa_date$creation_date, pattern = ca_dot) 
+index_cadot <- which(str_detect(cmoa_date$creation_date, pattern = ca_dot))
+cmoa_date[index_cadot, 'creation_date'] <- str_replace(sub_ca_dot, pattern = ca_dot, replacement = "")
+
+#remove /
+slash<- dgt(4) %R% "/" %R% dgt(4)
+slash_split <- str_split(slash_subset, pattern = "/")
+slash_subset <- str_subset(cmoa_date$creation_date, pattern = slash)
+numeric_slash <- sapply(slash_split, as.numeric, simplify = F)
+mean_slash <- sapply(numeric_slash, mean, simplify = F)
+round_slash <- sapply(mean_slash, round)
+index_slash<- which(str_detect(cmoa_date$creation_date, pattern = slash))
+cmoa_date[index_slash, 'creation_date'] <- round_slash
+
+#remove space
+space <- SPC
+subset<- str_subset(cmoa_date$creation_date, pattern = space)
+(str_extract(str_subset(cmoa_date$creation_date, pattern = space), pattern = dgt(4)))[!is.na(str_extract(str_subset(cmoa_date$creation_date, pattern = space), pattern = dgt(4)))]
+which(str_detect(cmoa_date$creation_date, pattern = space))
+index_im <- which(str_detect(str_subset(cmoa_date$creation_date, pattern = space), pattern = dgt(4)))
+index_subset <- str_detect(cmoa_date$creation_date, pattern = space)
+
+subset[index_im] <- (str_extract(str_subset(cmoa_date$creation_date, pattern = space), pattern = dgt(4)))[!is.na(str_extract(str_subset(cmoa_date$creation_date, pattern = space), pattern = dgt(4)))]
+cmoa_date[index_subset, 'creation_date'] <- cmoa_date$updated_latest_year[index_subset]
+
+#final sanity check
+sum(str_detect(cmoa_date$creation_date, pattern = exactly(dgt(4))))
+date <- select(cmoa_date, `title`, `creation_date`)
+sum(is.na(cmoa_date$creation_date))
+```
+##The area of the photograph is more informative than its length or width alone. I use dplyr package to compute the area of the photograph
+```{r}
+cmoa_size <- select(cmoa, `title`, `item_width`,`item_height`,`item_depth`)
+names(cmoa)
+str(cmoa_size)
+cmoa_size <- mutate(cmoa_size, surface = item_width * item_height )
+```
+##Full the join function from dplyr package to create masterlist, full artist table and etc
+```{r}
+#combine birthplace and deathplace of artist
+bp_dp <- full_join(bp_combined, dp_combined)
+
+#Combine birthplace, deathplace, birthdate and deathdate of the artist
+full_artist <- full_join(bp_dp, bd.dd_combined)
+
+#Create masterlist that combines both photographer and photograph information
+cmoa_final <- cbind(date, cmoa_size[,c("item_width", "item_height", "item_depth", "surface")])
+```
+##Output spreadsheet and csv full
+```{r}
+write.xlsx(full_artist, "cmoa_cleaned1.xlsx", sheetName="full_artist", row.names = FALSE)
+write.xlsx(bp_dp, "cmoa_cleaned1.xlsx", sheetName="birthp_as.matrideathp", row.names = FALSE, append = T)
+write.xlsx(bp_combined, "cmoa_cleaned1.xlsx", sheetName="birthplace", row.names = FALSE, append = T)
+write.xlsx(dp_combined, "cmoa_cleaned1.xlsx", sheetName="deathplace", row.names = FALSE, append = T)
+write.xlsx(cmoa_size_trimmed, "cmoa_cleaned1.xlsx", sheetName="photosize", row.names = FALSE, append = T)
+write.xlsx(cmoa_date, "cmoa_cleaned1.xlsx", sheetName="photodate", row.names = FALSE, append = T)
+write.xlsx(cmoa_final, "cmoa_cleaned1.xlsx", sheetName="photoinfo", row.names = FALSE, append = T)
+write.xlsx(masterlist, "cmoa_cleaned1.xlsx", sheetName="masterlist", row.names = FALSE, append = T)
+
+write.csv(full_artist, "cmoa_fullartist.csv", row.names = F)
+write.csv(bp_dp, "cmoa_bpdp.csv", row.names = F)
+write.csv(masterlist, "cmoa_masterlist.csv", row.names = F)
+```
+
